@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: jimmylu
+      POSTGRES_PASSWORD: jimmylu
+      POSTGRES_DB: houserenter
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jimmylu -d houserenter"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  bot:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DATABASE_URL: postgresql://jimmylu:jimmylu@db:5432/houserenter
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://jimmylu:jimmylu@db:5432/houserenter
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

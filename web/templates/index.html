@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HouseRenter</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+  <!-- Chat ID modal -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-icon">🏠</div>
+      <h2>HouseRenter</h2>
+      <p>請輸入你的 Telegram Chat ID<br>用來同步願望清單與黑名單</p>
+      <input id="modal-chatid" type="number" placeholder="例如：123456789" autofocus />
+      <button id="modal-confirm">進入</button>
+      <p class="modal-hint">在 Bot 輸入 /status 可查詢你的 Chat ID</p>
+    </div>
+  </div>
+
+  <!-- Header -->
+  <header>
+    <div class="header-inner">
+      <span class="logo">🏠 HouseRenter</span>
+      <nav class="nav-tabs">
+        <button class="nav-tab active" data-page="listings">
+          <span class="nav-icon">🏘</span>房源列表
+        </button>
+        <button class="nav-tab" data-page="wishlist">
+          <span class="nav-icon">❤️</span>心願清單
+        </button>
+        <button class="nav-tab" data-page="blacklist">
+          <span class="nav-icon">🚫</span>黑名單
+        </button>
+      </nav>
+      <div class="header-right">
+        <label class="toggle-label">
+          <input type="checkbox" id="show-unavailable" />
+          顯示已下架
+        </label>
+        <span class="chat-id-badge" id="chat-id-badge" title="點擊切換帳號"></span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ── Listings Page ── -->
+  <div id="page-listings" class="page active">
+    <main>
+      <div class="toolbar">
+        <div class="filters">
+          <div class="filter-group">
+            <label>地區篩選</label>
+            <div id="district-chips" class="chips"></div>
+          </div>
+          <div class="filter-group">
+            <label>排序方式</label>
+            <div class="sort-btns">
+              <button class="sort-btn active" data-sort="newest">最新上架</button>
+              <button class="sort-btn" data-sort="rent_asc">租金低→高</button>
+              <button class="sort-btn" data-sort="rent_desc">租金高→低</button>
+            </div>
+          </div>
+        </div>
+        <div class="toolbar-right">
+          <span id="total-count" class="total-count"></span>
+          <div class="pagination-top" id="pagination-top"></div>
+        </div>
+      </div>
+      <div id="listings-grid" class="listings-grid"></div>
+      <div class="pagination-bottom" id="pagination-bottom"></div>
+    </main>
+  </div>
+
+  <!-- ── Wishlist Page ── -->
+  <div id="page-wishlist" class="page">
+    <div class="subpage-header">
+      <div class="subpage-header-inner">
+        <div class="subpage-title">
+          <span class="subpage-icon">❤️</span>
+          <h2>心願清單</h2>
+          <span id="wishlist-count" class="count-badge"></span>
+        </div>
+        <p class="subpage-desc">你收藏的房源，方便隨時回顧</p>
+      </div>
+    </div>
+    <main>
+      <div id="wishlist-grid" class="listings-grid"></div>
+    </main>
+  </div>
+
+  <!-- ── Blacklist Page ── -->
+  <div id="page-blacklist" class="page">
+    <div class="subpage-header subpage-header--red">
+      <div class="subpage-header-inner">
+        <div class="subpage-title">
+          <span class="subpage-icon">🚫</span>
+          <h2>黑名單</h2>
+          <span id="blacklist-count" class="count-badge"></span>
+        </div>
+        <p class="subpage-desc">已封鎖的房源不會再出現在 Bot 推播中</p>
+      </div>
+    </div>
+    <main>
+      <div id="blacklist-list" class="blacklist-list"></div>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

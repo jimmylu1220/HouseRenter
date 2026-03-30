@@ -1,0 +1,52 @@
+# ── 機敏設定 ──────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+.tox/
+.venv/
+venv/
+env/
+
+# ── Playwright / Browser cache ────────────────────────────────
+.playwright/
+playwright-browsers/
+ms-playwright/
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Docker local data ─────────────────────────────────────────
+postgres-data/
+data/
+
+# ── OS / IDE ──────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Claude Code ───────────────────────────────────────────────
+.claude/
+
+# ── Misc ──────────────────────────────────────────────────────
+*.bak
+*.tmp
