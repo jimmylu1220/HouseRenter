@@ -379,6 +379,31 @@ async def get_listing_count() -> int:
         row = await conn.fetchrow("SELECT COUNT(*) AS cnt FROM listings WHERE is_available=TRUE")
     return row["cnt"]
 
+async def delete_old_listings(cutoff: "datetime") -> int:
+    """Delete listings last seen before `cutoff` that are not in any wishlist.
+    Returns the count of deleted rows."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            """
+            DELETE FROM listings
+            WHERE last_seen_at < $1
+              AND id NOT IN (SELECT listing_id FROM wishlist)
+            """,
+            cutoff,
+        )
+    count = int(result.split()[-1])
+    return count
+
+
+async def get_all_listings() -> list[Listing]:
+    """Return every listing in the DB (including unavailable)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM listings ORDER BY first_seen_at DESC")
+    return [_row_to_listing(row) for row in rows]
+
+
 async def get_recent_listings(limit: int = 10) -> list[Listing]:
     """從資料庫中取得最新的 N 筆有效房源"""
     pool = await get_pool()
@@ -654,6 +679,42 @@ async def get_blacklist_listings_for_web(chat_id: int) -> list[dict]:
                 d[ts] = d[ts].isoformat()
         result.append(d)
     return result
+
+
+# ─── Web Sessions (OTP token auth) ───────────────────────────────────────────
+
+async def create_web_session(chat_id: int) -> str:
+    """Generate a new 24-hour web session token for chat_id. Returns the token."""
+    import secrets
+    from datetime import timedelta
+    pool = await get_pool()
+    token = secrets.token_urlsafe(32)
+    expires = _now() + timedelta(hours=24)
+    async with pool.acquire() as conn:
+        # Revoke any existing token for this chat_id first
+        await conn.execute("DELETE FROM web_sessions WHERE chat_id = $1", chat_id)
+        await conn.execute(
+            "INSERT INTO web_sessions (token, chat_id, expires_at) VALUES ($1, $2, $3)",
+            token, chat_id, expires,
+        )
+    return token
+
+
+async def resolve_web_token(token: str) -> int | None:
+    """Validate a token and return its chat_id, or None if invalid/expired."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT chat_id FROM web_sessions WHERE token = $1 AND expires_at > NOW()",
+            token,
+        )
+    return row["chat_id"] if row else None
+
+
+async def revoke_web_token(token: str) -> None:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("DELETE FROM web_sessions WHERE token = $1", token)
 
 
 async def get_distinct_districts() -> list[str]:

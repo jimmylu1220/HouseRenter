@@ -4,6 +4,7 @@ import warnings
 from telegram.warnings import PTBUserWarning
 warnings.filterwarnings("ignore", category=PTBUserWarning)
 
+from telegram import BotCommand
 from telegram.error import NetworkError, TimedOut
 from telegram.ext import (
     ApplicationBuilder,
@@ -26,10 +27,12 @@ from bot.handlers.command_handlers import (
     handle_reset,
     handle_find,
     handle_list_all,
+    handle_cleanup_db,
+    handle_web_token,
 )
 from bot.handlers.conversation_handlers import preferences_conv_handler
 from bot.handlers.callback_handlers import handle_callback
-from scheduler.job_manager import get_scheduler, start_job_for_chat
+from scheduler.job_manager import get_scheduler, start_global_job, start_weekly_cleanup, start_job_for_chat
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -55,10 +58,25 @@ async def post_init(application) -> None:
     scheduler.start()
     logger.info("Scheduler started.")
 
+    await application.bot.set_my_commands([
+        BotCommand("status",      "📊 查看目前監控狀態"),
+        BotCommand("preferences", "⚙️ 設定篩選條件"),
+        BotCommand("find",        "🔍 搜尋符合條件的房源"),
+        BotCommand("list_latest", "📋 最新房源（套用篩選）"),
+        BotCommand("list_all",    "📋 全部已爬到的房源"),
+        BotCommand("wishlist",    "❤️ 查看願望清單"),
+        BotCommand("blacklist",   "🚫 查看黑名單"),
+        BotCommand("web_token",   "🔑 取得網頁登入 Token"),
+        BotCommand("cleanup_db",  "🗑 清除不符合條件的房源"),
+        BotCommand("reset",       "⚠️ 重置所有個人設定"),
+    ])
+    logger.info("Bot commands registered.")
+
     active_chats = await queries.get_all_active_monitors()
-    for chat_id in active_chats:
-        start_job_for_chat(chat_id, application)
-        logger.info("Restored monitor for chat %s", chat_id)
+    if active_chats:
+        start_global_job(application)
+        logger.info("Restored global monitor for %d chat(s): %s", len(active_chats), active_chats)
+    start_weekly_cleanup(application)
 
 
 async def post_shutdown(application) -> None:
@@ -95,6 +113,8 @@ def main() -> None:
     app.add_handler(CommandHandler("reset",       handle_reset))
     app.add_handler(CommandHandler("find",        handle_find))
     app.add_handler(CommandHandler("list_all",    handle_list_all))
+    app.add_handler(CommandHandler("cleanup_db",  handle_cleanup_db))
+    app.add_handler(CommandHandler("web_token",   handle_web_token))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)

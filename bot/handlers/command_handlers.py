@@ -23,13 +23,13 @@ async def handle_start_monitoring(update: Update, context: ContextTypes.DEFAULT_
 
     await queries.set_monitor_active(chat_id)
 
-    from scheduler.job_manager import start_job_for_chat
-    start_job_for_chat(chat_id, context.application)
+    from scheduler.job_manager import start_global_job
+    start_global_job(context.application)
 
     from config import SCRAPE_INTERVAL_MINUTES
     await update.message.reply_text(
         "✅ 開始監控雙北租屋！\n\n"
-        f"每 {SCRAPE_INTERVAL_MINUTES} 分鐘自動抓取 591 租屋網 及 好房網 最新資訊。\n"
+        f"每 {SCRAPE_INTERVAL_MINUTES} 分鐘自動抓取 591 租屋網 最新資訊。\n"
         "只會推播符合你設定條件的物件。\n\n"
         "📝 輸入「停止」暫停監控\n"
         "⚙️ /preferences — 設定篩選條件\n"
@@ -143,6 +143,7 @@ async def handle_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         f"  /find — 依篩選條件搜尋現有房源\n"
         f"  /list_latest — 列出最新房源（套用篩選）\n"
         f"  /list_all — 列出所有已爬到的房源\n"
+        f"  /cleanup_db — 清除不符合篩選條件的房源\n"
         f"  /wishlist — 查看願望清單\n"
         f"  /blacklist — 查看黑名單\n"
         f"  /status — 目前狀態\n"
@@ -288,6 +289,94 @@ async def handle_blacklist(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             f"🚫 [{source}] {external_id}\n🕐 封鎖於 {added_at}",
             reply_markup=blacklist_item_keyboard(source, external_id),
         )
+
+
+def _cleanup_matches(listing, prefs) -> bool:
+    """Strict AND filter for cleanup: rent range AND district must both pass."""
+    if prefs.min_rent and listing.rent and listing.rent < prefs.min_rent:
+        return False
+    if prefs.max_rent and listing.rent and listing.rent > prefs.max_rent:
+        return False
+    if prefs.districts and listing.district and listing.district not in prefs.districts:
+        return False
+    return True
+
+
+async def handle_web_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Generate a one-time web login token valid for 24 hours."""
+    chat_id = update.effective_chat.id
+    token = await queries.create_web_session(chat_id)
+    await update.message.reply_text(
+        f"🔑 <b>網頁登入 Token</b>\n\n"
+        f"<code>{token}</code>\n\n"
+        f"在網頁登入頁面選擇「Token 登入」，貼上以上 Token 即可。\n"
+        f"⏱ 有效期限：<b>24 小時</b>（每次執行此指令會重新產生）",
+        parse_mode="HTML",
+    )
+
+
+async def handle_cleanup_db(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """預覽並清除 DB 中不符合篩選條件（租金 AND 行政區）的房源。"""
+    chat_id = update.effective_chat.id
+    prefs = await queries.get_preference(chat_id)
+
+    if not prefs or (not prefs.min_rent and not prefs.max_rent and not prefs.districts):
+        await update.message.reply_text(
+            "⚙️ 尚未設定租金範圍或行政區條件，無法進行清理。\n"
+            "請先用 /preferences 設定篩選條件。"
+        )
+        return
+
+    await update.message.reply_text("🔍 正在掃描資料庫...")
+
+    all_listings = await queries.get_all_listings()
+    if not all_listings:
+        await update.message.reply_text("📭 資料庫中目前沒有任何房源。")
+        return
+
+    to_delete = [l for l in all_listings if not _cleanup_matches(l, prefs)]
+
+    if not to_delete:
+        await update.message.reply_text(
+            f"✅ 資料庫中全部 {len(all_listings):,} 筆房源都符合你的篩選條件，無需清理！"
+        )
+        return
+
+    # 統計各條件不符原因
+    rent_fail_count    = sum(1 for l in to_delete if (
+        (prefs.min_rent and l.rent and l.rent < prefs.min_rent) or
+        (prefs.max_rent and l.rent and l.rent > prefs.max_rent)
+    ))
+    district_fail_count = sum(1 for l in to_delete if (
+        prefs.districts and l.district and l.district not in prefs.districts
+    ))
+
+    conditions = []
+    if prefs.min_rent or prefs.max_rent:
+        lo = f"{prefs.min_rent:,}" if prefs.min_rent else "不限"
+        hi = f"{prefs.max_rent:,}" if prefs.max_rent else "不限"
+        conditions.append(f"💰 租金：{lo} ~ {hi} 元")
+    if prefs.districts:
+        conditions.append(f"📍 行政區：{', '.join(prefs.districts)}")
+
+    breakdown = []
+    if rent_fail_count:
+        breakdown.append(f"  • 租金不符：{rent_fail_count:,} 筆")
+    if district_fail_count:
+        breakdown.append(f"  • 行政區不符：{district_fail_count:,} 筆")
+
+    from bot.keyboards import cleanup_confirm_keyboard
+    await update.message.reply_text(
+        f"🗑 <b>資料庫清理預覽</b>\n\n"
+        f"<b>清理條件（全部符合才保留）</b>\n"
+        + "\n".join(conditions) +
+        f"\n\n<b>預計刪除：{len(to_delete):,} 筆</b>（共 {len(all_listings):,} 筆）\n"
+        + "\n".join(breakdown) +
+        f"\n\n⚠️ 已加入願望清單的房源不會被刪除。\n"
+        f"確定要清理嗎？",
+        parse_mode="HTML",
+        reply_markup=cleanup_confirm_keyboard(),
+    )
 
 
 async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

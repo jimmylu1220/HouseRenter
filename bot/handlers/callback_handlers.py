@@ -138,6 +138,39 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         else:
             await query.answer("找不到分頁資料，請重新執行 /list_latest。", show_alert=True)
 
+    # ── Cleanup DB: confirm ──────────────────────────────────────────────────
+    elif data == "cleanup_confirm":
+        await query.answer()
+        try:
+            await query.edit_message_text("🔍 清理中，請稍候...")
+        except Exception:
+            pass
+
+        from bot.handlers.command_handlers import _cleanup_matches
+        prefs = await queries.get_preference(chat_id)
+        all_listings = await queries.get_all_listings()
+        to_delete_ids = [l.id for l in all_listings if not _cleanup_matches(l, prefs)]
+
+        deleted = await queries.delete_listings_not_in_wishlist(to_delete_ids)
+        skipped = len(to_delete_ids) - deleted
+
+        msg = f"✅ 清理完成！已刪除 <b>{deleted:,}</b> 筆不符合條件的房源。"
+        if skipped > 0:
+            msg += f"\n（{skipped:,} 筆因在願望清單中而保留）"
+
+        try:
+            await query.edit_message_text(msg, parse_mode="HTML")
+        except Exception:
+            await context.bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML")
+
+    # ── Cleanup DB: cancel ───────────────────────────────────────────────────
+    elif data == "cleanup_cancel":
+        await query.answer()
+        try:
+            await query.edit_message_text("已取消清理。")
+        except Exception:
+            pass
+
     # ── Reset: confirm ───────────────────────────────────────────────────────
     elif data == "reset_confirm":
         await query.answer()

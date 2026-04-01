@@ -6,3 +6,5 @@ APScheduler==3.10.4
 python-dotenv==1.0.1
 lxml==5.2.2
 playwright==1.44.0
+alembic==1.13.2
+sqlalchemy==2.0.31

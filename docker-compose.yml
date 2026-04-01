@@ -2,13 +2,13 @@ services:
   db:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: jimmylu
-      POSTGRES_PASSWORD: jimmylu
-      POSTGRES_DB: houserenter
+      POSTGRES_USER: ${POSTGRES_USER:-jimmylu}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-jimmylu}
+      POSTGRES_DB: ${POSTGRES_DB:-houserenter}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U jimmylu -d houserenter"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jimmylu} -d ${POSTGRES_DB:-houserenter}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -20,7 +20,7 @@ services:
         condition: service_healthy
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
-      DATABASE_URL: postgresql://jimmylu:jimmylu@db:5432/houserenter
+      DATABASE_URL: postgresql://${POSTGRES_USER:-jimmylu}:${POSTGRES_PASSWORD:-jimmylu}@db:5432/${POSTGRES_DB:-houserenter}
     restart: unless-stopped
 
   web:
@@ -31,7 +31,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://jimmylu:jimmylu@db:5432/houserenter
+      DATABASE_URL: postgresql://${POSTGRES_USER:-jimmylu}:${POSTGRES_PASSWORD:-jimmylu}@db:5432/${POSTGRES_DB:-houserenter}
     ports:
       - "8000:8000"
     restart: unless-stopped

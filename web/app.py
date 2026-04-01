@@ -77,6 +77,18 @@ async def api_blacklist_listings(chat_id: int = Query(...)):
     return await queries.get_blacklist_listings_for_web(chat_id)
 
 
+class TokenBody(BaseModel):
+    token: str
+
+
+@app.post("/api/auth/token")
+async def api_auth_token(body: TokenBody):
+    chat_id = await queries.resolve_web_token(body.token)
+    if chat_id is None:
+        raise HTTPException(status_code=401, detail="Token 無效或已過期，請重新執行 /web_token")
+    return {"chat_id": chat_id}
+
+
 class WishlistBody(BaseModel):
     chat_id: int
     listing_id: int

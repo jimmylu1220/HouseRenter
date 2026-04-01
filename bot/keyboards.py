@@ -102,6 +102,13 @@ def pagination_keyboard(next_offset: int, total: int) -> InlineKeyboardMarkup:
     ]])
 
 
+def cleanup_confirm_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("🗑 確認清理", callback_data="cleanup_confirm"),
+        InlineKeyboardButton("❌ 取消",     callback_data="cleanup_cancel"),
+    ]])
+
+
 def reset_confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ 確認重置", callback_data="reset_confirm"),

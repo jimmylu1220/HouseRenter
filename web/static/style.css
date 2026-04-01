@@ -727,6 +727,100 @@ header {
   transform: translateX(-50%) translateY(0);
 }
 
+/* ── Modal tabs (Chat ID / Token) ────────────────────────── */
+#modal-tab-bar {
+  display: flex;
+  gap: 0;
+  border: 1.5px solid #dde2ea;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-bottom: 1.2rem;
+}
+.modal-tab {
+  flex: 1;
+  padding: 0.55rem;
+  border: none;
+  background: #f7f9fc;
+  font-size: 0.83rem;
+  font-weight: 600;
+  color: #888;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.modal-tab + .modal-tab { border-left: 1.5px solid #dde2ea; }
+.modal-tab.active { background: #4f8ef7; color: #fff; }
+.modal-pane { display: none; }
+.modal-pane.active { display: block; }
+.modal-pane p { margin-bottom: 0.9rem; }
+
+/* ── Subpage filters ──────────────────────────────────────── */
+.subpage-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.8rem;
+}
+.chips--light .chip {
+  background: rgba(255,255,255,.15);
+  border-color: rgba(255,255,255,.35);
+  color: #fff;
+}
+.chips--light .chip:hover  { background: rgba(255,255,255,.3); border-color: #fff; }
+.chips--light .chip.active { background: #fff; border-color: #fff; color: #4f8ef7; font-weight: 700; }
+.subpage-filters .sort-btns .sort-btn {
+  background: rgba(255,255,255,.15);
+  border-color: rgba(255,255,255,.35);
+  color: #fff;
+}
+.subpage-filters .sort-btns .sort-btn:hover  { background: rgba(255,255,255,.3); border-color: #fff; }
+.subpage-filters .sort-btns .sort-btn.active { background: #fff; border-color: #fff; color: #4f8ef7; font-weight: 700; box-shadow: none; }
+
+/* ── Lightbox ─────────────────────────────────────────────── */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  border: none;
+  background: rgba(0,0,0,.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 300;
+  padding: 1.5rem;
+}
+.lightbox[open] { display: flex; }
+.lightbox::backdrop { background: transparent; }
+.lightbox img {
+  max-width: 100%;
+  max-height: 90vh;
+  border-radius: 10px;
+  object-fit: contain;
+  box-shadow: 0 8px 40px rgba(0,0,0,.6);
+}
+.lightbox-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.2rem;
+  background: rgba(255,255,255,.15);
+  border: none;
+  color: #fff;
+  font-size: 1.1rem;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.lightbox-close:hover { background: rgba(255,255,255,.3); }
+.card-thumb { cursor: zoom-in; }
+
 /* ── Responsive ───────────────────────────────────────────── */
 @media (max-width: 600px) {
   .listings-grid {

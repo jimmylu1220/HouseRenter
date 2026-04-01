@@ -2,7 +2,7 @@ from db.models import Listing
 
 
 def format_listing(listing: Listing) -> str:
-    source_badge = "🏠 591" if listing.source == "591" else "🏡 好房網"
+    source_badge = "🏠 591" if listing.source == "591" else f"🏡 {listing.source}"
     lines = [f"{source_badge}  <b>{_esc(listing.title)}</b>", ""]
 
     # Location
