@@ -112,11 +112,22 @@ async def _global_scrape_and_notify(application: "Application") -> None:
             early_exit = False
 
             async for listing in scraper.fetch_listings(region_ids):
-                seen_ids[scraper.SOURCE_NAME].add(listing.external_id)
+                # 先篩選：找出所有符合條件的使用者
+                matching_users = [
+                    (chat_id, ud)
+                    for chat_id, ud in user_data.items()
+                    if (listing.source, listing.external_id) not in ud["blacklisted"]
+                    and _matches_preferences(listing, ud["prefs"])
+                ]
 
-                # Upsert to DB once (globally) to determine if it's truly new
+                # 沒有任何使用者符合 → 不寫入 DB，直接略過
+                if not matching_users:
+                    continue
+
+                # 至少一位使用者符合 → upsert 到 DB，並記錄 seen_ids（用於下架偵測）
                 listing_id, is_new = await queries.upsert_listing(listing)
                 listing.id = listing_id
+                seen_ids[scraper.SOURCE_NAME].add(listing.external_id)
 
                 if is_new:
                     consecutive_old_count = 0
@@ -127,13 +138,8 @@ async def _global_scrape_and_notify(application: "Application") -> None:
                         early_exit = True
                         break
 
-                # Distribute to each user based on their prefs + blacklist
-                for chat_id, ud in user_data.items():
-                    if (listing.source, listing.external_id) in ud["blacklisted"]:
-                        continue
-                    if not _matches_preferences(listing, ud["prefs"]):
-                        continue
-
+                # 分發給符合條件的使用者
+                for chat_id, ud in matching_users:
                     if ud["is_first"]:
                         ud["first_run_ids"].append(listing_id)
                     elif is_new:
