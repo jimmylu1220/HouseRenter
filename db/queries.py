@@ -34,8 +34,9 @@ async def upsert_listing(listing: Listing) -> tuple[int, bool]:
                 (source, external_id, url, title, area, district, address,
                  rent, layout, size_ping, floor, floor_total, deposit,
                  utilities, trash, kitchen, parking, pets, elevator,
-                 gender, extra_info, thumbnail_url, first_seen_at, last_seen_at, is_available)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,TRUE)
+                 gender, extra_info, thumbnail_url, description, images,
+                 first_seen_at, last_seen_at, is_available)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,TRUE)
             RETURNING id
             """,
             listing.source, listing.external_id, listing.url, listing.title,
@@ -47,9 +48,26 @@ async def upsert_listing(listing: Listing) -> tuple[int, bool]:
             listing.gender,
             json.dumps(listing.extra_info) if listing.extra_info else None,
             listing.thumbnail_url,
+            listing.description,
+            json.dumps(listing.images) if listing.images else None,
             _now(), _now(),
         )
         return row["id"], True
+
+
+async def update_listing_images(listing_id: int, images: list) -> None:
+    """Replace the listing's `images` JSONB column.
+
+    Used by bot/sender.py to cache Telegram file_ids alongside the original
+    URLs after the first successful send_media_group/send_photo, so that
+    subsequent deliveries can reuse the file_id and skip a download.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE listings SET images=$1::jsonb WHERE id=$2",
+            json.dumps(images), listing_id,
+        )
 
 
 async def mark_listing_unavailable(source: str, external_id: str) -> None:
@@ -72,6 +90,9 @@ def _row_to_listing(row) -> Listing:
     extra = row["extra_info"]
     if isinstance(extra, str):
         extra = json.loads(extra)
+    images = row["images"]
+    if isinstance(images, str):
+        images = json.loads(images)
     return Listing(
         id=row["id"],
         source=row["source"],
@@ -96,6 +117,8 @@ def _row_to_listing(row) -> Listing:
         gender=row["gender"],
         extra_info=extra,
         thumbnail_url=row["thumbnail_url"],
+        description=row["description"],
+        images=images,
         first_seen_at=row["first_seen_at"],
         last_seen_at=row["last_seen_at"],
         is_available=row["is_available"],
@@ -619,6 +642,9 @@ async def get_listings_for_web(
         extra = d.get("extra_info")
         if isinstance(extra, str):
             d["extra_info"] = json.loads(extra)
+        imgs = d.get("images")
+        if isinstance(imgs, str):
+            d["images"] = json.loads(imgs)
         for ts_field in ("first_seen_at", "last_seen_at"):
             if ts_field in d and d[ts_field] is not None:
                 d[ts_field] = d[ts_field].isoformat()
@@ -646,6 +672,9 @@ async def get_wishlist_listings_for_web(chat_id: int) -> list[dict]:
         extra = d.get("extra_info")
         if isinstance(extra, str):
             d["extra_info"] = json.loads(extra)
+        imgs = d.get("images")
+        if isinstance(imgs, str):
+            d["images"] = json.loads(imgs)
         for ts in ("first_seen_at", "last_seen_at", "wishlisted_at"):
             if d.get(ts) is not None:
                 d[ts] = d[ts].isoformat()
@@ -674,6 +703,9 @@ async def get_blacklist_listings_for_web(chat_id: int) -> list[dict]:
         extra = d.get("extra_info")
         if isinstance(extra, str):
             d["extra_info"] = json.loads(extra)
+        imgs = d.get("images")
+        if isinstance(imgs, str):
+            d["images"] = json.loads(imgs)
         for ts in ("first_seen_at", "last_seen_at", "blacklisted_at"):
             if d.get(ts) is not None:
                 d[ts] = d[ts].isoformat()

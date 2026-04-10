@@ -73,7 +73,7 @@ async def _global_scrape_and_notify(application: "Application") -> None:
     import db.queries as queries
     from scrapers.scraper_591 import Scraper591
     from bot.sender import send_listing_message, send_page
-    from config import REGION_IDS
+    from config import REGION_IDS, FACEBOOK_ENABLED
 
     active_chat_ids = await queries.get_all_active_monitors()
     if not active_chat_ids:
@@ -105,6 +105,9 @@ async def _global_scrape_and_notify(application: "Application") -> None:
     completed_sources: set[str] = set()
 
     scrapers = [Scraper591()]
+    if FACEBOOK_ENABLED:
+        from scrapers.scraper_facebook import ScraperFacebook
+        scrapers.append(ScraperFacebook())
     scrape_failed = False
     try:
         for scraper in scrapers:
@@ -187,8 +190,15 @@ async def _global_scrape_and_notify(application: "Application") -> None:
         _scrape_failure_counts[chat_id] = 0
 
     # ── Stale detection ────────────────────────────────────────────────────────
+    # Sources may opt out via STALE_CHECK_ENABLED=False (e.g. Facebook, where
+    # we can only see the most recent posts and "not seen" doesn't mean "removed").
+    stale_disabled_sources = {
+        s.SOURCE_NAME for s in scrapers if not getattr(s, "STALE_CHECK_ENABLED", True)
+    }
     stale_ids: list[int] = []
     for source, ids in seen_ids.items():
+        if source in stale_disabled_sources:
+            continue
         if source not in completed_sources:
             logger.info("%s 本輪提早結束，跳過下架判斷。", source)
             continue

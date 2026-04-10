@@ -21,6 +21,14 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       DATABASE_URL: postgresql://${POSTGRES_USER:-jimmylu}:${POSTGRES_PASSWORD:-jimmylu}@db:5432/${POSTGRES_DB:-houserenter}
+      # Facebook 爬蟲（選填）— 留空 FACEBOOK_GROUPS 即停用
+      FACEBOOK_GROUPS: ${FACEBOOK_GROUPS:-}
+      FACEBOOK_COOKIES_PATH: ${FACEBOOK_COOKIES_PATH:-}
+      FACEBOOK_MAX_POSTS_PER_GROUP: ${FACEBOOK_MAX_POSTS_PER_GROUP:-30}
+    # 啟用 FB 爬蟲時，取消下面註解並把 storage_state JSON 放在 host 的 ./secrets/ 目錄，
+    # 然後在 .env 設 FACEBOOK_COOKIES_PATH=/secrets/fb_state.json
+    # volumes:
+    #   - ./secrets:/secrets:ro
     restart: unless-stopped
 
   web:

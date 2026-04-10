@@ -1,9 +1,22 @@
 from db.models import Listing
 
+# Telegram caption hard limit is 1024 chars; leave headroom for HTML tags & other lines.
+_FB_DESC_PREVIEW_CHARS = 600
+
+
+def _source_badge(source: str) -> str:
+    if source == "591":
+        return "🏠 591"
+    if source == "facebook":
+        return "📘 FB社團"
+    if source == "housefun":
+        return "🏘 好房網"
+    return f"🏡 {source}"
+
 
 def format_listing(listing: Listing) -> str:
-    source_badge = "🏠 591" if listing.source == "591" else f"🏡 {listing.source}"
-    lines = [f"{source_badge}  <b>{_esc(listing.title)}</b>", ""]
+    headline = listing.title or (listing.description[:30] + "…" if listing.description else "(無標題)")
+    lines = [f"{_source_badge(listing.source)}  <b>{_esc(headline)}</b>", ""]
 
     # Location
     area_str = " ".join(filter(None, [listing.area, listing.district]))
@@ -44,6 +57,14 @@ def format_listing(listing: Listing) -> str:
         features.append(f"性別:{listing.gender}")
     if features:
         lines.append("✨ " + "　".join(features))
+
+    # Free-form post body (Facebook posts and similar). Truncated for Telegram caption limit.
+    if listing.description:
+        body = listing.description.strip()
+        if len(body) > _FB_DESC_PREVIEW_CHARS:
+            body = body[:_FB_DESC_PREVIEW_CHARS].rstrip() + "…"
+        lines.append("")
+        lines.append(f"📝 {_esc(body)}")
 
     # Upload timestamp
     if listing.first_seen_at:
