@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+import aiohttp
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -377,6 +378,93 @@ async def handle_cleanup_db(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode="HTML",
         reply_markup=cleanup_confirm_keyboard(),
     )
+
+
+_591_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Referer": "https://rent.591.com.tw/list",
+}
+# 591 下架頁面的 title 關鍵字
+_591_NOT_FOUND_TITLE = "頁面不存在"
+
+
+async def _is_591_removed(session: aiohttp.ClientSession, url: str) -> bool:
+    """Return True if the 591 listing has been taken down."""
+    try:
+        async with session.get(url, allow_redirects=True) as resp:
+            if resp.status == 404:
+                return True
+            if resp.status in (301, 302):
+                # redirect without following → destination is likely homepage/list
+                return True
+            # 200 but "page not found" content (591 sometimes returns 200 for removed)
+            text = await resp.text(errors="ignore")
+            return _591_NOT_FOUND_TITLE in text
+    except Exception as exc:
+        logger.debug("[check_591] request error for %s: %s", url, exc)
+        return False  # connection failure → assume still up, don't false-positive
+
+
+async def handle_check_591(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """對資料庫中所有可用的 591 房源發 GET 請求，確認是否已下架。"""
+    await update.message.reply_text("🔍 正在檢查 591 房源是否下架，請稍候...")
+
+    try:
+        all_listings = await queries.get_all_listings()
+        targets = [l for l in all_listings if l.source == "591" and l.is_available and l.url]
+
+        if not targets:
+            await update.message.reply_text("📭 資料庫中沒有可用的 591 房源需要檢查。")
+            return
+
+        await update.message.reply_text(f"共 {len(targets)} 筆 591 房源，開始逐一確認...")
+
+        removed = []
+        timeout = aiohttp.ClientTimeout(total=15, connect=8)
+        connector = aiohttp.TCPConnector(ssl=False)
+        async with aiohttp.ClientSession(
+            headers=_591_HEADERS, timeout=timeout, connector=connector
+        ) as session:
+            for listing in targets:
+                if await _is_591_removed(session, listing.url):
+                    await queries.mark_listing_unavailable(listing.source, listing.external_id)
+                    removed.append(listing)
+                await asyncio.sleep(0.5)
+
+        if removed:
+            await update.message.reply_text(
+                f"⚠️ <b>共 {len(removed)} 筆 591 房源已下架：</b>", parse_mode="HTML"
+            )
+            # Send in chunks to stay within Telegram's 4096-char limit.
+            chunk: list[str] = []
+            chunk_len = 0
+            for l in removed:
+                title = (l.title or l.external_id)[:40]
+                line = f'  • <a href="{l.url}">{title}</a>'
+                if chunk_len + len(line) + 1 > 3800:
+                    await update.message.reply_text(
+                        "\n".join(chunk), parse_mode="HTML", disable_web_page_preview=True
+                    )
+                    chunk, chunk_len = [], 0
+                chunk.append(line)
+                chunk_len += len(line) + 1
+            if chunk:
+                await update.message.reply_text(
+                    "\n".join(chunk), parse_mode="HTML", disable_web_page_preview=True
+                )
+        else:
+            await update.message.reply_text(
+                f"✅ 全部 {len(targets)} 筆 591 房源仍在上架中，無下架物件。"
+            )
+
+    except Exception as exc:
+        logger.error("[/check_591] 發生錯誤: %s", exc)
+        await update.message.reply_text("❌ 檢查時發生錯誤，請查看後台日誌。")
 
 
 async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

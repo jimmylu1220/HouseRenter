@@ -161,8 +161,9 @@ async def send_listing_message(
 
     images = _normalize_images(listing.images)
 
-    # Multi-image path
-    if len(images) >= 2:
+    # Multi-image path (skip for Facebook: send_media_group can't carry reply_markup,
+    # so we'd need a split message. Use single-photo path to keep it as one message.)
+    if len(images) >= 2 and listing.source != "facebook":
         ok = await _send_multi_image(bot, chat_id, listing, text)
         if ok:
             # send_media_group doesn't support reply_markup, so send the buttons separately.

@@ -58,6 +58,14 @@ def format_listing(listing: Listing) -> str:
     if features:
         lines.append("✨ " + "　".join(features))
 
+    # Upload timestamp
+    if listing.first_seen_at:
+        date_str = listing.first_seen_at.strftime("%Y-%m-%d")
+        lines.append(f"🕐 {date_str}")
+
+    link_label = "前往社團" if listing.source == "facebook" else "查看詳情"
+    lines.append(f'🔗 <a href="{listing.url}">{link_label}</a>')
+
     # Free-form post body (Facebook posts and similar). Truncated for Telegram caption limit.
     if listing.description:
         body = listing.description.strip()
@@ -66,13 +74,6 @@ def format_listing(listing: Listing) -> str:
         lines.append("")
         lines.append(f"📝 {_esc(body)}")
 
-    # Upload timestamp
-    if listing.first_seen_at:
-        date_str = listing.first_seen_at.strftime("%Y-%m-%d")
-        lines.append(f"🕐 {date_str}")
-
-    lines.append("")
-    lines.append(f'🔗 <a href="{listing.url}">查看詳情</a>')
     return "\n".join(lines)
 
 

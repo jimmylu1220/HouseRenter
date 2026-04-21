@@ -45,6 +45,17 @@ _LAYOUT_ROOM_RE = re.compile(r"(\d+)\s*房")
 _LAYOUT_KIND_RE = re.compile(r"(獨立套房|套房|雅房|分租|整層|頂加|公寓)")
 _FLOOR_RE = re.compile(r"(\d+)\s*[樓F]")
 _POST_ID_RE = re.compile(r"/(?:posts|permalink)/(\d+)")
+_STORY_ID_RE = re.compile(r"story_fbid=(\d+)")
+_DATA_FT_ID_RE = re.compile(r'"top_level_post_id"\s*:\s*"?(\d+)"?')
+
+# Patterns that change between scrapes — strip before computing fallback MD5.
+_DYNAMIC_TEXT_RE = re.compile(
+    r"\d+\s*(?:小時|分鐘|天|秒|週)前"           # timestamps: "3小時前"
+    r"|\d+\s*(?:個讚|則留言|次分享|人按讚|人留言)" # counts: "15個讚"
+    r"|讚\s*留言\s*分享"                          # action bar labels
+    r"|^\s*\d+\s*$",                             # standalone numbers (reaction counts)
+    re.MULTILINE,
+)
 
 
 def _extract_rent(text: str) -> int:
@@ -201,24 +212,89 @@ class ScraperFacebook(BaseScraper):
             max_scroll = 10
 
             while collected < FACEBOOK_MAX_POSTS_PER_GROUP and scroll < max_scroll:
-                articles = await page.query_selector_all("article, div[role='article']")
+                # m.facebook.com uses data-tracking-duration-id divs as post containers.
+                # Filter to top-level only (exclude nested sub-cards like price summaries).
+                all_divs = await page.query_selector_all("div[data-tracking-duration-id]")
+                articles = []
+                for div in all_divs:
+                    try:
+                        is_nested = await div.evaluate(
+                            'el => !!el.parentElement.closest("[data-tracking-duration-id]")'
+                        )
+                        if not is_nested:
+                            articles.append(div)
+                    except Exception:
+                        pass
+
+                did_goback = False
                 for article in articles:
+                    # Parse article data FIRST (while DOM is still valid on group page).
                     listing = await self._parse_article(article, group)
                     if listing is None:
                         continue
                     if listing.external_id in seen:
                         continue
+
+                    # Try to capture the real post URL.
+                    # Strategy 1: click the article (retry loop sometimes fires past
+                    #             the body overlay and triggers story.php navigation).
+                    # Strategy 2: click the first large post image as fallback.
+                    pre_url = page.url
+                    try:
+                        await article.scroll_into_view_if_needed(timeout=2000)
+                        await asyncio.sleep(0.2)
+                        await article.click(timeout=2500)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.5)
+
+                    # Fallback: try clicking the first post image if article click failed.
+                    # Also handles lazy-loaded images (data-src instead of src).
+                    if page.url == pre_url:
+                        try:
+                            img_sel = (
+                                "img[src*='scontent'], img[data-src*='scontent']"
+                            )
+                            for img in await article.query_selector_all(img_sel):
+                                box = await img.bounding_box()
+                                if not box or box["width"] < 40 or box["height"] < 40:
+                                    continue  # skip tiny icons/emojis
+                                await img.scroll_into_view_if_needed(timeout=1000)
+                                await asyncio.sleep(0.1)
+                                await img.click(timeout=1500)
+                                await asyncio.sleep(0.5)
+                                break
+                        except Exception:
+                            pass
+
+                    if page.url != pre_url and "story" in page.url:
+                        m = _STORY_ID_RE.search(page.url)
+                        if m:
+                            post_id = m.group(1)
+                            listing.url = (
+                                f"https://www.facebook.com/groups/{group}/permalink/{post_id}/"
+                            )
+                        # Return to group feed before yielding / processing next article.
+                        try:
+                            await page.go_back(wait_until="domcontentloaded", timeout=10_000)
+                            await asyncio.sleep(1.5)
+                        except Exception:
+                            pass
+                        did_goback = True
+
                     seen.add(listing.external_id)
                     collected += 1
                     yield listing
-                    if collected >= FACEBOOK_MAX_POSTS_PER_GROUP:
-                        break
+                    if collected >= FACEBOOK_MAX_POSTS_PER_GROUP or did_goback:
+                        break  # Re-query after go_back; outer loop handles scrolling.
 
                 if collected >= FACEBOOK_MAX_POSTS_PER_GROUP:
                     break
-                await page.evaluate("window.scrollBy(0, window.innerHeight * 3)")
-                await asyncio.sleep(2)
-                scroll += 1
+                if not did_goback:
+                    await page.evaluate("window.scrollBy(0, window.innerHeight * 3)")
+                    await asyncio.sleep(2)
+                    scroll += 1
+                # If did_goback: re-query same page next iteration without scrolling.
 
             logger.info("FB group %s: yielded %d posts", group, collected)
         finally:
@@ -226,26 +302,40 @@ class ScraperFacebook(BaseScraper):
 
     async def _parse_article(self, article, group: str) -> Optional[Listing]:
         try:
-            # ── post id + canonical URL ──────────────────────────────────
-            post_id: Optional[str] = None
-            post_url: Optional[str] = None
-            for h in await article.query_selector_all("a[href*='/posts/'], a[href*='/permalink/']"):
-                href = await h.get_attribute("href")
-                if not href:
-                    continue
-                m = _POST_ID_RE.search(href)
-                if m:
-                    post_id = m.group(1)
-                    clean = href.split("?")[0]
-                    post_url = clean if clean.startswith("http") else f"https://m.facebook.com{clean}"
-                    break
-            if not post_id:
-                return None
-
             # ── body text ────────────────────────────────────────────────
             body = (await article.inner_text() or "").strip()
             if len(body) < 20:
                 return None
+            if "求租" in body:
+                return None
+
+            # ── post id + canonical URL ──────────────────────────────────
+            # m.facebook.com strips all hrefs from the rendered DOM, so direct
+            # post URLs are unavailable. Fall back to the group page URL.
+            post_id: Optional[str] = None
+
+            for h in await article.query_selector_all("a[href]"):
+                href = await h.get_attribute("href") or ""
+                m = _POST_ID_RE.search(href) or _STORY_ID_RE.search(href)
+                if m:
+                    post_id = m.group(1)
+                    break
+
+            if not post_id:
+                data_ft = await article.get_attribute("data-ft") or ""
+                m = _DATA_FT_ID_RE.search(data_ft)
+                if m:
+                    post_id = m.group(1)
+
+            if post_id:
+                post_url = f"https://www.facebook.com/groups/{group}/posts/{post_id}/"
+            else:
+                import hashlib
+                # Strip timestamps/counts so the hash stays stable across scrapes.
+                stable = _DYNAMIC_TEXT_RE.sub("", body)
+                stable = " ".join(stable.split())  # normalise whitespace
+                post_id = "h" + hashlib.md5(stable[:400].encode()).hexdigest()[:15]
+                post_url = f"https://www.facebook.com/groups/{group}/"
 
             # ── images ───────────────────────────────────────────────────
             images: list[str] = []
@@ -253,9 +343,16 @@ class ScraperFacebook(BaseScraper):
                 src = await ih.get_attribute("src") or await ih.get_attribute("data-src")
                 if not src:
                     continue
-                # FB image CDN; skip avatars / emojis
+                # FB image CDN only; skip emojis / icons
                 if "scontent" not in src:
                     continue
+                # Skip avatars: profile pictures are rendered small (< 80px)
+                try:
+                    box = await ih.bounding_box()
+                    if box and (box["width"] < 80 or box["height"] < 80):
+                        continue
+                except Exception:
+                    pass
                 if src in images:
                     continue
                 images.append(src)

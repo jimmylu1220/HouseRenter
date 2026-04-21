@@ -29,6 +29,7 @@ from bot.handlers.command_handlers import (
     handle_list_all,
     handle_cleanup_db,
     handle_web_token,
+    handle_check_591,
 )
 from bot.handlers.conversation_handlers import preferences_conv_handler
 from bot.handlers.callback_handlers import handle_callback
@@ -68,6 +69,7 @@ async def post_init(application) -> None:
         BotCommand("blacklist",   "🚫 查看黑名單"),
         BotCommand("web_token",   "🔑 取得網頁登入 Token"),
         BotCommand("cleanup_db",  "🗑 清除不符合條件的房源"),
+        BotCommand("check_591",   "🔎 檢查 591 房源是否已下架"),
         BotCommand("reset",       "⚠️ 重置所有個人設定"),
     ])
     logger.info("Bot commands registered.")
@@ -115,6 +117,7 @@ def main() -> None:
     app.add_handler(CommandHandler("list_all",    handle_list_all))
     app.add_handler(CommandHandler("cleanup_db",  handle_cleanup_db))
     app.add_handler(CommandHandler("web_token",   handle_web_token))
+    app.add_handler(CommandHandler("check_591",   handle_check_591))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)
