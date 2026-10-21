@@ -45,3 +45,12 @@ FACEBOOK_ADMIN_CHAT_ID: int | None = (
     int(os.environ["FACEBOOK_ADMIN_CHAT_ID"]) if os.environ.get("FACEBOOK_ADMIN_CHAT_ID") else None
 )
 FACEBOOK_ENABLED: bool = bool(FACEBOOK_GROUPS)
+
+# ── Discord webhook（選填）─────────────────────────────────────────────────────
+# DISCORD_WEBHOOK_URL：頻道 webhook 網址；留空即停用。
+# DISCORD_MIRROR_CHAT_ID：Discord 頻道同步這位 Telegram 使用者收到的新房源
+#   （套用他的篩選條件與黑名單，且他需在監控中）。
+DISCORD_WEBHOOK_URL: str = os.environ.get("DISCORD_WEBHOOK_URL", "")
+DISCORD_MIRROR_CHAT_ID: int | None = (
+    int(os.environ["DISCORD_MIRROR_CHAT_ID"]) if os.environ.get("DISCORD_MIRROR_CHAT_ID") else None
+)

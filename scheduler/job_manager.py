@@ -109,7 +109,10 @@ async def _run_source(scraper, region_ids, user_data, application, queries) -> t
     """
     from bot.sender import send_listing_message
     from bot.keyboards import listing_keyboard
+    from config import DISCORD_MIRROR_CHAT_ID
+    from notifiers.discord_webhook import get_discord_notifier
 
+    discord = get_discord_notifier() if DISCORD_MIRROR_CHAT_ID else None
     seen: set[str] = set()
     early_exit_after = getattr(scraper, "EARLY_EXIT_AFTER_KNOWN", 5)
     consecutive_old_count = 0
@@ -151,6 +154,11 @@ async def _run_source(scraper, region_ids, user_data, application, queries) -> t
                     )
                 except Exception as exc:
                     logger.warning("即時推播失敗 listing %s → chat %s: %s", listing_id, chat_id, exc)
+                if discord and chat_id == DISCORD_MIRROR_CHAT_ID:
+                    try:
+                        await discord.send_listing(listing)
+                    except Exception as exc:
+                        logger.warning("Discord 推播失敗 listing %s: %s", listing_id, exc)
 
     return seen, True
 
