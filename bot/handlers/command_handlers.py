@@ -467,6 +467,54 @@ async def handle_check_591(update: Update, _context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("❌ 檢查時發生錯誤，請查看後台日誌。")
 
 
+async def handle_check_fb(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """抓一次各 FB 社團（不寫入資料庫），回報抓到的貼文數與解析結果。"""
+    from config import FACEBOOK_ENABLED, FACEBOOK_GROUPS
+    from scheduler.job_manager import get_facebook_scraper
+    from scrapers.facebook import FacebookAuthError
+
+    if not FACEBOOK_ENABLED:
+        await update.message.reply_text("📘 FB 爬蟲未啟用（FACEBOOK_GROUPS 為空）。")
+        return
+
+    await update.message.reply_text(f"🔍 正在檢查 {len(FACEBOOK_GROUPS)} 個 FB 社團，請稍候...")
+    scraper = get_facebook_scraper()
+    for group in FACEBOOK_GROUPS:
+        try:
+            results = await scraper.preview(group, limit=10)
+        except FacebookAuthError as exc:
+            await scraper.close()
+            await update.message.reply_text(
+                f"❌ FB 登入失效：{exc}\n請執行 python scripts/fb_login.py 重新登入。"
+            )
+            return
+        except Exception as exc:
+            logger.error("[/check_fb] group %s 失敗: %s", group, exc, exc_info=True)
+            await update.message.reply_text(f"❌ 社團 {group} 抓取失敗：{exc}")
+            continue
+
+        parsed = [(p, l) for p, l in results if l is not None]
+        lines = [
+            f"📘 <b>社團 {group}</b>",
+            f"抓到 {len(results)} 篇貼文，{len(parsed)} 篇判定為出租物件：",
+        ]
+        for _post, l in parsed[:5]:
+            parts = [
+                f"{l.rent:,}元" if l.rent else "租金?",
+                l.district or "區域?",
+                l.layout or "格局?",
+                f"{l.size_ping:g}坪" if l.size_ping else "坪數?",
+            ]
+            lines.append(f'• <a href="{l.url}">{_esc_html(l.title[:30])}</a>\n  ' + " / ".join(parts))
+        await update.message.reply_text(
+            "\n".join(lines), parse_mode="HTML", disable_web_page_preview=True
+        )
+
+
+def _esc_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 async def handle_reset(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
         "⚠️ <b>確定要重置嗎？</b>\n\n"

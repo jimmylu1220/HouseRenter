@@ -28,7 +28,7 @@ class Listing:
     gender: Optional[str] = None
     extra_info: Optional[dict] = None
     thumbnail_url: Optional[str] = None
-    description: Optional[str] = None      # full post body (mainly Facebook)
+    description: Optional[str] = None      # full post body (free-form sources, e.g. FB groups)
     images: Optional[list] = None          # list[str] of URLs, or list[{url, file_id}] after Telegram upload
     first_seen_at: Optional[datetime] = None
     last_seen_at: Optional[datetime] = None

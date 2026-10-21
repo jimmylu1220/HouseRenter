@@ -1,7 +1,7 @@
 from db.models import Listing
 
 # Telegram caption hard limit is 1024 chars; leave headroom for HTML tags & other lines.
-_FB_DESC_PREVIEW_CHARS = 600
+_DESC_PREVIEW_CHARS = 600
 
 
 def _source_badge(source: str) -> str:
@@ -9,8 +9,6 @@ def _source_badge(source: str) -> str:
         return "🏠 591"
     if source == "facebook":
         return "📘 FB社團"
-    if source == "housefun":
-        return "🏘 好房網"
     return f"🏡 {source}"
 
 
@@ -63,14 +61,13 @@ def format_listing(listing: Listing) -> str:
         date_str = listing.first_seen_at.strftime("%Y-%m-%d")
         lines.append(f"🕐 {date_str}")
 
-    link_label = "前往社團" if listing.source == "facebook" else "查看詳情"
-    lines.append(f'🔗 <a href="{listing.url}">{link_label}</a>')
+    lines.append(f'🔗 <a href="{listing.url}">查看詳情</a>')
 
-    # Free-form post body (Facebook posts and similar). Truncated for Telegram caption limit.
+    # Free-form post body (e.g. group posts). Truncated for Telegram caption limit.
     if listing.description:
         body = listing.description.strip()
-        if len(body) > _FB_DESC_PREVIEW_CHARS:
-            body = body[:_FB_DESC_PREVIEW_CHARS].rstrip() + "…"
+        if len(body) > _DESC_PREVIEW_CHARS:
+            body = body[:_DESC_PREVIEW_CHARS].rstrip() + "…"
         lines.append("")
         lines.append(f"📝 {_esc(body)}")
 
