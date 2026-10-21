@@ -54,3 +54,9 @@ DISCORD_WEBHOOK_URL: str = os.environ.get("DISCORD_WEBHOOK_URL", "")
 DISCORD_MIRROR_CHAT_ID: int | None = (
     int(os.environ["DISCORD_MIRROR_CHAT_ID"]) if os.environ.get("DISCORD_MIRROR_CHAT_ID") else None
 )
+
+# ── Discord bot（選填）─────────────────────────────────────────────────────────
+# DISCORD_BOT_TOKEN：Discord Developer Portal 建立的 bot token；留空即停用。
+#   啟用後在 Discord 頻道用 /subscribe、/filters 設定該頻道自己的推播條件，
+#   與上面的 webhook 同步功能互相獨立。
+DISCORD_BOT_TOKEN: str = os.environ.get("DISCORD_BOT_TOKEN", "")

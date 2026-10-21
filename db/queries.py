@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from typing import Optional
 import asyncpg
 
-from db.models import Listing, WishlistItem, UserPreference
+from db.models import Listing, WishlistItem, UserPreference, DiscordChannel
 from db.database import get_pool
 
 
@@ -261,17 +261,21 @@ async def get_preference(chat_id: int) -> Optional[UserPreference]:
         )
     if not row:
         return None
+    return _pref_from_row(row, row["chat_id"])
 
-    def _loads(v):
-        if v is None:
-            return None
-        return json.loads(v) if isinstance(v, str) else v
 
+def _loads(v):
+    if v is None:
+        return None
+    return json.loads(v) if isinstance(v, str) else v
+
+
+def _pref_from_row(row, chat_id: int) -> UserPreference:
     return UserPreference(
-        chat_id=row["chat_id"],
+        chat_id=chat_id,
         min_rent=row["min_rent"],
         max_rent=row["max_rent"],
-        regions=_loads(row["regions"]),
+        regions=_loads(row.get("regions")),
         districts=_loads(row["districts"]),
         min_size=row["min_size"],
         layout_filter=_loads(row["layout_filter"]),
@@ -762,3 +766,108 @@ async def get_distinct_districts() -> list[str]:
             """
         )
     return [r["district"] for r in rows]
+
+# ─── Discord channels ────────────────────────────────────────────────────────
+
+def _discord_channel_from_row(row) -> DiscordChannel:
+    return DiscordChannel(
+        channel_id=row["channel_id"],
+        prefs=_pref_from_row(row, row["channel_id"]),
+        guild_id=row["guild_id"],
+        active=row["active"],
+        first_run_done=row["first_run_done"],
+        updated_at=row["updated_at"],
+    )
+
+
+async def get_discord_channel(channel_id: int) -> Optional[DiscordChannel]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM discord_channels WHERE channel_id=$1", channel_id
+        )
+    return _discord_channel_from_row(row) if row else None
+
+
+async def get_active_discord_channels() -> list[DiscordChannel]:
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT * FROM discord_channels WHERE active")
+    return [_discord_channel_from_row(r) for r in rows]
+
+
+async def subscribe_discord_channel(channel_id: int, guild_id: int | None) -> None:
+    """Activate a channel; its next scan rebuilds the baseline (first_run_done=FALSE)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO discord_channels (channel_id, guild_id, active, first_run_done, updated_at)
+            VALUES ($1, $2, TRUE, FALSE, $3)
+            ON CONFLICT (channel_id) DO UPDATE SET
+                guild_id       = EXCLUDED.guild_id,
+                active         = TRUE,
+                first_run_done = FALSE,
+                updated_at     = EXCLUDED.updated_at
+            """,
+            channel_id, guild_id, _now(),
+        )
+
+
+async def unsubscribe_discord_channel(channel_id: int) -> bool:
+    """Deactivate a channel but keep its filters. Returns False if it wasn't active."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        status = await conn.execute(
+            "UPDATE discord_channels SET active=FALSE WHERE channel_id=$1 AND active",
+            channel_id,
+        )
+    return status != "UPDATE 0"
+
+
+async def save_discord_preference(channel_id: int, guild_id: int | None, pref: UserPreference) -> None:
+    """Save a channel's filters. Resets first_run_done so changed filters don't
+    flood the channel with old listings that only now match."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO discord_channels
+                (channel_id, guild_id, min_rent, max_rent, districts, min_size,
+                 layout_filter, pets_required, parking_required, elevator_required,
+                 keywords_include, keywords_exclude, first_run_done, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,FALSE,$13)
+            ON CONFLICT (channel_id) DO UPDATE SET
+                guild_id          = EXCLUDED.guild_id,
+                min_rent          = EXCLUDED.min_rent,
+                max_rent          = EXCLUDED.max_rent,
+                districts         = EXCLUDED.districts,
+                min_size          = EXCLUDED.min_size,
+                layout_filter     = EXCLUDED.layout_filter,
+                pets_required     = EXCLUDED.pets_required,
+                parking_required  = EXCLUDED.parking_required,
+                elevator_required = EXCLUDED.elevator_required,
+                keywords_include  = EXCLUDED.keywords_include,
+                keywords_exclude  = EXCLUDED.keywords_exclude,
+                first_run_done    = FALSE,
+                updated_at        = EXCLUDED.updated_at
+            """,
+            channel_id, guild_id, pref.min_rent, pref.max_rent,
+            json.dumps(pref.districts) if pref.districts else None,
+            pref.min_size,
+            json.dumps(pref.layout_filter) if pref.layout_filter else None,
+            pref.pets_required, pref.parking_required, pref.elevator_required,
+            json.dumps(pref.keywords_include) if pref.keywords_include else None,
+            json.dumps(pref.keywords_exclude) if pref.keywords_exclude else None,
+            _now(),
+        )
+
+
+async def set_discord_first_run_done(channel_id: int, updated_at: datetime) -> None:
+    """Only applies if the channel wasn't re-subscribed or re-filtered mid-scan."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE discord_channels SET first_run_done=TRUE WHERE channel_id=$1 AND updated_at=$2",
+            channel_id, updated_at,
+        )

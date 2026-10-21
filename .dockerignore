@@ -1,0 +1,15 @@
+# Keep secrets and local clutter out of the build context / images.
+.env
+.env.*
+!.env.example
+secrets/
+.git/
+.claude/
+.vscode/
+.idea/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.log
+logs/

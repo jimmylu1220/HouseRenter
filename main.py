@@ -35,6 +35,7 @@ from bot.handlers.command_handlers import (
 from bot.handlers.conversation_handlers import preferences_conv_handler
 from bot.handlers.callback_handlers import handle_callback
 from scheduler.job_manager import get_scheduler, start_global_job, start_weekly_cleanup, close_scrapers
+from discord_bot.client import get_discord_bot, start_discord_bot, stop_discord_bot
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -76,10 +77,16 @@ async def post_init(application) -> None:
     ])
     logger.info("Bot commands registered.")
 
+    await start_discord_bot(application)
+
     active_chats = await queries.get_all_active_monitors()
-    if active_chats:
+    discord_channels = await queries.get_active_discord_channels() if get_discord_bot() else []
+    if active_chats or discord_channels:
         start_global_job(application)
-        logger.info("Restored global monitor for %d chat(s): %s", len(active_chats), active_chats)
+        logger.info(
+            "Restored global monitor for %d chat(s): %s, %d Discord channel(s)",
+            len(active_chats), active_chats, len(discord_channels),
+        )
     start_weekly_cleanup(application)
 
 
@@ -87,6 +94,7 @@ async def post_shutdown(application) -> None:
     scheduler = get_scheduler()
     if scheduler.running:
         scheduler.shutdown(wait=False)
+    await stop_discord_bot()
     await close_scrapers()
     await close_db()
     logger.info("Shutdown complete.")

@@ -59,3 +59,13 @@ class UserPreference:
     keywords_include: Optional[list] = None
     keywords_exclude: Optional[list] = None
     updated_at: Optional[datetime] = None
+
+
+@dataclass
+class DiscordChannel:
+    channel_id: int
+    prefs: UserPreference
+    guild_id: Optional[int] = None
+    active: bool = False
+    first_run_done: bool = False
+    updated_at: Optional[datetime] = None

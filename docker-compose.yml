@@ -30,6 +30,8 @@ services:
       # Discord 頻道通知（選填）— 留空 DISCORD_WEBHOOK_URL 即停用
       DISCORD_WEBHOOK_URL: ${DISCORD_WEBHOOK_URL:-}
       DISCORD_MIRROR_CHAT_ID: ${DISCORD_MIRROR_CHAT_ID:-}
+      # Discord bot（選填）— 在頻道用 /subscribe、/filters 設定條件；留空即停用
+      DISCORD_BOT_TOKEN: ${DISCORD_BOT_TOKEN:-}
     # 用 scripts/fb_login.py 產生的登入狀態放在 host 的 ./secrets/fb_state.json。
     # 可寫入：爬蟲會把更新後的 cookie 寫回，延長登入壽命。
     volumes:

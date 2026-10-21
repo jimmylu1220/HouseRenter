@@ -21,6 +21,9 @@ _scheduler: AsyncIOScheduler | None = None
 _scrape_failure_counts: dict[int, int] = defaultdict(int)
 _FAILURE_ALERT_THRESHOLD = 3
 
+# Listings posted to a Discord channel after its baseline scan.
+_DISCORD_FIRST_RUN_PREVIEW = 5
+
 
 def get_scheduler() -> AsyncIOScheduler:
     global _scheduler
@@ -63,6 +66,12 @@ def start_global_job(application: "Application") -> None:
         logger.info("Started Facebook scrape job (every %s min)", FACEBOOK_INTERVAL_MINUTES)
 
 
+def ensure_global_job(application: "Application") -> None:
+    """Start the scrape jobs unless they are already scheduled."""
+    if get_scheduler().get_job("global_monitor") is None:
+        start_global_job(application)
+
+
 def start_weekly_cleanup(application: "Application") -> None:
     """Start the weekly auto-cleanup job (runs every Sunday at 03:00 UTC)."""
     scheduler = get_scheduler()
@@ -102,7 +111,29 @@ async def _load_user_data(active_chat_ids: list[int], queries) -> dict[int, dict
     return user_data
 
 
-async def _run_source(scraper, region_ids, user_data, application, queries) -> tuple[set[str], bool]:
+async def _load_channel_data(queries) -> dict[int, dict]:
+    """Load each subscribed Discord channel's filters + first-run state.
+
+    Empty when the Discord bot isn't configured or isn't running.
+    """
+    from discord_bot.client import get_discord_bot
+
+    if get_discord_bot() is None:
+        return {}
+    return {
+        ch.channel_id: {
+            "prefs": ch.prefs,
+            "is_first": not ch.first_run_done,
+            "updated_at": ch.updated_at,
+            "first_run_ids": [],
+        }
+        for ch in await queries.get_active_discord_channels()
+    }
+
+
+async def _run_source(
+    scraper, region_ids, user_data, application, queries, channel_data=None
+) -> tuple[set[str], bool]:
     """Scrape one source, upsert matching listings and push new ones.
 
     Returns (external ids seen, whether the source was scraped to the end).
@@ -110,9 +141,12 @@ async def _run_source(scraper, region_ids, user_data, application, queries) -> t
     from bot.sender import send_listing_message
     from bot.keyboards import listing_keyboard
     from config import DISCORD_MIRROR_CHAT_ID
+    from discord_bot.client import get_discord_bot
     from notifiers.discord_webhook import get_discord_notifier
 
     discord = get_discord_notifier() if DISCORD_MIRROR_CHAT_ID else None
+    discord_bot = get_discord_bot()
+    channel_data = channel_data or {}
     seen: set[str] = set()
     early_exit_after = getattr(scraper, "EARLY_EXIT_AFTER_KNOWN", 5)
     consecutive_old_count = 0
@@ -126,11 +160,17 @@ async def _run_source(scraper, region_ids, user_data, application, queries) -> t
             and _matches_preferences(listing, ud["prefs"])
         ]
 
-        # 沒有任何使用者符合 → 不寫入 DB，直接略過
-        if not matching_users:
+        matching_channels = [
+            (channel_id, cd)
+            for channel_id, cd in channel_data.items()
+            if _matches_preferences(listing, cd["prefs"])
+        ]
+
+        # 沒有任何使用者或 Discord 頻道符合 → 不寫入 DB，直接略過
+        if not matching_users and not matching_channels:
             continue
 
-        # 至少一位使用者符合 → upsert 到 DB，並記錄 seen（用於下架偵測）
+        # 至少一位使用者或頻道符合 → upsert 到 DB，並記錄 seen（用於下架偵測）
         listing_id, is_new = await queries.upsert_listing(listing)
         listing.id = listing_id
         seen.add(listing.external_id)
@@ -160,7 +200,50 @@ async def _run_source(scraper, region_ids, user_data, application, queries) -> t
                     except Exception as exc:
                         logger.warning("Discord 推播失敗 listing %s: %s", listing_id, exc)
 
+        for channel_id, cd in matching_channels:
+            if cd["is_first"]:
+                cd["first_run_ids"].append(listing_id)
+            elif is_new and discord_bot:
+                try:
+                    await discord_bot.send_listing(channel_id, listing)
+                except Exception as exc:
+                    logger.warning("Discord 頻道推播失敗 listing %s → channel %s: %s", listing_id, channel_id, exc)
+
     return seen, True
+
+
+async def _finish_discord_first_runs(channel_data: dict[int, dict], queries) -> None:
+    """Report each new/re-filtered channel's baseline and mark it done."""
+    from discord_bot.client import get_discord_bot
+
+    discord_bot = get_discord_bot()
+    if discord_bot is None:
+        return
+
+    for channel_id, cd in channel_data.items():
+        if not cd["is_first"]:
+            continue
+        ids = cd["first_run_ids"]
+        try:
+            if ids:
+                preview = ids[:_DISCORD_FIRST_RUN_PREVIEW]
+                await discord_bot.send_text(
+                    channel_id,
+                    f"✅ 掃描完成：目前有 **{len(ids)}** 筆符合條件的房源，以下是最新 {len(preview)} 筆。\n"
+                    "之後有新房源會即時推播到這裡。",
+                )
+                for listing_id in preview:
+                    listing = await queries.get_listing_by_id(listing_id)
+                    if listing:
+                        await discord_bot.send_listing(channel_id, listing)
+            else:
+                await discord_bot.send_text(
+                    channel_id,
+                    "📭 掃描完成：目前沒有符合條件的房源，有新物件會即時推播到這裡。",
+                )
+        except Exception as exc:
+            logger.warning("Discord 首次掃描回報失敗 channel %s: %s", channel_id, exc)
+        await queries.set_discord_first_run_done(channel_id, cd["updated_at"])
 
 
 async def _global_scrape_and_notify(application: "Application") -> None:
@@ -170,11 +253,15 @@ async def _global_scrape_and_notify(application: "Application") -> None:
     from config import REGION_IDS
 
     active_chat_ids = await queries.get_all_active_monitors()
-    if not active_chat_ids:
-        logger.info("全域爬蟲：無活躍監控使用者，跳過本輪。")
+    channel_data = await _load_channel_data(queries)
+    if not active_chat_ids and not channel_data:
+        logger.info("全域爬蟲：無活躍監控使用者或 Discord 頻道，跳過本輪。")
         return
 
-    logger.info("全域爬蟲開始，服務 %d 位使用者", len(active_chat_ids))
+    logger.info(
+        "全域爬蟲開始，服務 %d 位使用者、%d 個 Discord 頻道",
+        len(active_chat_ids), len(channel_data),
+    )
 
     user_data = await _load_user_data(active_chat_ids, queries)
     for chat_id, ud in user_data.items():
@@ -192,7 +279,9 @@ async def _global_scrape_and_notify(application: "Application") -> None:
     scrape_failed = False
     try:
         for scraper in scrapers:
-            seen, completed = await _run_source(scraper, region_ids, user_data, application, queries)
+            seen, completed = await _run_source(
+                scraper, region_ids, user_data, application, queries, channel_data
+            )
             seen_ids[scraper.SOURCE_NAME] |= seen
             if completed:
                 completed_sources.add(scraper.SOURCE_NAME)
@@ -266,6 +355,8 @@ async def _global_scrape_and_notify(application: "Application") -> None:
                 await send_page(application.bot, chat_id, ids, offset=0, queries=queries)
             await queries.set_first_run_done(chat_id)
 
+    await _finish_discord_first_runs(channel_data, queries)
+
 
 # ── Facebook job ───────────────────────────────────────────────────────────────
 
@@ -296,21 +387,23 @@ async def _facebook_scrape_and_notify(application: "Application") -> None:
     from config import FACEBOOK_ADMIN_CHAT_ID
 
     active_chat_ids = await queries.get_all_active_monitors()
-    if not active_chat_ids:
-        return
 
-    # Users still in their first 591 scan are skipped; they get FB listings
-    # from the next cycle on.
+    # Users and channels still in their first 591 scan are skipped; they get
+    # FB listings from the next cycle on.
     user_data = {
         cid: ud for cid, ud in (await _load_user_data(active_chat_ids, queries)).items()
         if not ud["is_first"]
     }
-    if not user_data:
+    channel_data = {
+        cid: cd for cid, cd in (await _load_channel_data(queries)).items()
+        if not cd["is_first"]
+    }
+    if not user_data and not channel_data:
         return
 
     scraper = get_facebook_scraper()
     try:
-        await _run_source(scraper, [], user_data, application, queries)
+        await _run_source(scraper, [], user_data, application, queries, channel_data)
         _fb_auth_alerted = False
     except FacebookAuthError as exc:
         logger.error("FB 登入失效: %s", exc)
@@ -378,18 +471,13 @@ async def _notify_wishlist_removals(stale_ids: list[int], application, queries):
 
 def _matches_preferences(listing, prefs) -> bool:
     """
-    Two-tier filter:
-      AND (hard) — rent range, min size, excluded keywords: ALL must pass.
-      OR  (soft) — districts, layout, pets, parking, elevator, included keywords:
-                   if any are configured, AT LEAST ONE must match.
+    Every configured condition must pass (AND): rent range, min size,
+    excluded keywords, districts, layout, pets, parking, elevator,
+    included keywords.
     """
-    lid = getattr(listing, "id", None) or listing.external_id
-    title_short = (listing.title or "")[:30]
-
     if prefs is None:
         return True
 
-    # ── Hard AND conditions ────────────────────────────────────────────────────
     if prefs.min_rent and listing.rent and listing.rent < prefs.min_rent:
         return False
     if prefs.max_rent and listing.rent and listing.rent > prefs.max_rent:
@@ -404,29 +492,18 @@ def _matches_preferences(listing, prefs) -> bool:
         if any(kw.lower() in combined for kw in prefs.keywords_exclude):
             return False
 
-    # ── Soft OR conditions ─────────────────────────────────────────────────────
-    or_results: list[tuple[str, bool]] = []
-
-    if prefs.districts and listing.district:
-        or_results.append(("district", listing.district in prefs.districts))
-
-    if prefs.layout_filter and listing.layout:
-        or_results.append(("layout", listing.layout in prefs.layout_filter))
-
-    if prefs.pets_required:
-        or_results.append(("pets", bool(listing.pets)))
-
-    if prefs.parking_required:
-        or_results.append(("parking", bool(listing.parking)))
-
-    if prefs.elevator_required:
-        or_results.append(("elevator", listing.elevator is True))
-
-    if prefs.keywords_include:
-        missing = [kw for kw in prefs.keywords_include if kw.lower() not in combined]
-        or_results.append(("keywords_include", not missing))
-
-    if or_results and not any(passed for _, passed in or_results):
+    if prefs.districts and listing.district and listing.district not in prefs.districts:
         return False
+    if prefs.layout_filter and listing.layout and listing.layout not in prefs.layout_filter:
+        return False
+    if prefs.pets_required and not listing.pets:
+        return False
+    if prefs.parking_required and not listing.parking:
+        return False
+    if prefs.elevator_required and listing.elevator is not True:
+        return False
+    if prefs.keywords_include:
+        if any(kw.lower() not in combined for kw in prefs.keywords_include):
+            return False
 
     return True
