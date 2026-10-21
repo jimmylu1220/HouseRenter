@@ -202,6 +202,22 @@ _SHARED_RE = re.compile(r"雅房")
 _FLOOR_PAIR_RE = re.compile(r"(\d{1,2})\s*[樓F]?\s*[/／]\s*(\d{1,2})\s*[樓F]")
 _FLOOR_RE = re.compile(r"(?<!\d)(\d{1,2})\s*[樓F](?![a-zA-Z])")
 
+# Amenities. Negations are checked first so "不可養寵物" / "無電梯" don't count.
+_PET_WORD = r"(?:寵物?|貓|狗|毛孩|犬)"
+_PETS_NO_RE = re.compile(
+    rf"(?:不可|不能|不得|禁止|禁養|謝絕|婉拒|拒絕|不接受|無法)[^\n，,。；;]{{0,4}}{_PET_WORD}"
+    rf"|寵物[^\n，,。；;]{{0,3}}(?:不可|不行|禁止|謝絕|勿|NO|No|no)"
+)
+_PETS_YES_RE = re.compile(
+    rf"(?:可|能|歡迎|接受|允許)[^\n，,。；;]{{0,4}}{_PET_WORD}"
+    rf"|寵物[^\n，,。；;]{{0,3}}(?:可|友善|OK|ok|歡迎)"
+)
+_ELEVATOR_NO_RE = re.compile(r"(?:無|沒有?|非|不含)電梯")
+_ELEVATOR_YES_RE = re.compile(r"電梯")
+# 機車位 is a motorcycle spot, not the parking people filter for.
+_PARKING_NO_RE = re.compile(r"(?:無|沒有?|不含|不附)(?:汽車)?(?:停)?車位")
+_PARKING_YES_RE = re.compile(r"(?<!機)(?:停車位|車位|車庫)")
+
 _CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5}
 
 # Bare names ("大安" for "大安區"). Excluded when followed by 路/街 so that
@@ -278,6 +294,19 @@ def extract_floor(text: str) -> tuple[Optional[str], Optional[int]]:
     return None, None
 
 
+def _mentions(text: str, yes: re.Pattern, no: re.Pattern) -> bool:
+    return not no.search(text) and bool(yes.search(text))
+
+
+def extract_amenities(text: str) -> tuple[Optional[str], Optional[str], Optional[bool]]:
+    """(pets, parking, elevator) in the same shape the 591 scraper uses."""
+    return (
+        "可" if _mentions(text, _PETS_YES_RE, _PETS_NO_RE) else None,
+        "有" if _mentions(text, _PARKING_YES_RE, _PARKING_NO_RE) else None,
+        True if _mentions(text, _ELEVATOR_YES_RE, _ELEVATOR_NO_RE) else None,
+    )
+
+
 def is_wanted_post(text: str) -> bool:
     head = text[:80]
     return bool(_WANTED_RE.search(head)) or "求租" in text
@@ -305,6 +334,7 @@ def parse_post(raw: RawPost) -> Optional[Listing]:
         return None
 
     floor, floor_total = extract_floor(text)
+    pets, parking, elevator = extract_amenities(text)
     return Listing(
         source=SOURCE_NAME,
         external_id=raw.post_id,
@@ -317,6 +347,9 @@ def parse_post(raw: RawPost) -> Optional[Listing]:
         size_ping=extract_size_ping(text),
         floor=floor,
         floor_total=floor_total,
+        pets=pets,
+        parking=parking,
+        elevator=elevator,
         description=text[:_DESC_MAX_CHARS],
         images=list(raw.images),
         thumbnail_url=raw.images[0] if raw.images else None,

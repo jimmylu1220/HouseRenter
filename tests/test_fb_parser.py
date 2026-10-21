@@ -166,3 +166,24 @@ def test_extract_posts_from_multiline_bodies():
 def test_extract_posts_ignores_nodes_without_message():
     payload = {"post_id": "999", "feedback": {"reaction_count": 3}}
     assert extract_posts(payload, "g") == []
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("8坪 3F 可養寵物", ("可", None, None)),
+    ("寵物友善，歡迎毛孩", ("可", None, None)),
+    ("可養貓 有電梯 含車位", ("可", "有", True)),
+    ("不可養寵物 無電梯", (None, None, None)),
+    ("謝絕寵物，公寓沒電梯", (None, None, None)),
+    ("寵物不可", (None, None, None)),
+    ("附機車位", (None, None, None)),
+    ("無車位 電梯大樓", (None, None, True)),
+    ("平面車位另租", (None, "有", None)),
+])
+def test_extract_amenities(text, expected):
+    from scrapers.facebook.parser import extract_amenities
+    assert extract_amenities(text) == expected
+
+
+def test_parse_post_sets_amenities():
+    listing = parse_post(RawPost(post_id="9", group="g", text=SUITE_POST))
+    assert listing.pets == "可"
