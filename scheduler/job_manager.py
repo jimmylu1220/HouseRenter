@@ -30,7 +30,13 @@ def get_scheduler() -> AsyncIOScheduler:
 
 
 def start_global_job(application: "Application") -> None:
-    """Start the single shared scraper job that serves all active users."""
+    """Start the shared scraper jobs that serve all active users.
+
+    591 runs every SCRAPE_INTERVAL_MINUTES. Facebook (if configured) runs as a
+    separate, slower job so a slow or broken FB scrape never delays 591.
+    """
+    from config import FACEBOOK_ENABLED, FACEBOOK_INTERVAL_MINUTES
+
     scheduler = get_scheduler()
     scheduler.add_job(
         func=_global_scrape_and_notify,
@@ -41,6 +47,20 @@ def start_global_job(application: "Application") -> None:
         next_run_time=datetime.now(timezone.utc),
     )
     logger.info("Started global scrape job (every %s min)", SCRAPE_INTERVAL_MINUTES)
+
+    if FACEBOOK_ENABLED:
+        scheduler.add_job(
+            func=_facebook_scrape_and_notify,
+            trigger=IntervalTrigger(minutes=FACEBOOK_INTERVAL_MINUTES),
+            args=[application],
+            id="facebook_monitor",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+            # Give the first 591 run (and any first-run scans) a head start.
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+        logger.info("Started Facebook scrape job (every %s min)", FACEBOOK_INTERVAL_MINUTES)
 
 
 def start_weekly_cleanup(application: "Application") -> None:
@@ -69,11 +89,77 @@ def stop_job_for_chat(chat_id: int) -> None:
 
 # ── Global scrape job ──────────────────────────────────────────────────────────
 
+async def _load_user_data(active_chat_ids: list[int], queries) -> dict[int, dict]:
+    """Load each user's prefs + blacklist + first-run state."""
+    user_data: dict[int, dict] = {}
+    for chat_id in active_chat_ids:
+        user_data[chat_id] = {
+            "prefs": await queries.get_preference(chat_id),
+            "blacklisted": await queries.get_blacklisted_set(chat_id),
+            "is_first": not await queries.is_first_run_done(chat_id),
+            "first_run_ids": [],
+        }
+    return user_data
+
+
+async def _run_source(scraper, region_ids, user_data, application, queries) -> tuple[set[str], bool]:
+    """Scrape one source, upsert matching listings and push new ones.
+
+    Returns (external ids seen, whether the source was scraped to the end).
+    """
+    from bot.sender import send_listing_message
+    from bot.keyboards import listing_keyboard
+
+    seen: set[str] = set()
+    early_exit_after = getattr(scraper, "EARLY_EXIT_AFTER_KNOWN", 5)
+    consecutive_old_count = 0
+
+    async for listing in scraper.fetch_listings(region_ids):
+        # 先篩選：找出所有符合條件的使用者
+        matching_users = [
+            (chat_id, ud)
+            for chat_id, ud in user_data.items()
+            if (listing.source, listing.external_id) not in ud["blacklisted"]
+            and _matches_preferences(listing, ud["prefs"])
+        ]
+
+        # 沒有任何使用者符合 → 不寫入 DB，直接略過
+        if not matching_users:
+            continue
+
+        # 至少一位使用者符合 → upsert 到 DB，並記錄 seen（用於下架偵測）
+        listing_id, is_new = await queries.upsert_listing(listing)
+        listing.id = listing_id
+        seen.add(listing.external_id)
+
+        if is_new:
+            consecutive_old_count = 0
+        else:
+            consecutive_old_count += 1
+            if early_exit_after and consecutive_old_count >= early_exit_after:
+                logger.info("%s 已追上進度，提早結束爬取。", scraper.SOURCE_NAME)
+                return seen, False
+
+        # 分發給符合條件的使用者
+        for chat_id, ud in matching_users:
+            if ud["is_first"]:
+                ud["first_run_ids"].append(listing_id)
+            elif is_new:
+                try:
+                    await send_listing_message(
+                        application.bot, chat_id, listing, listing_keyboard(listing_id)
+                    )
+                except Exception as exc:
+                    logger.warning("即時推播失敗 listing %s → chat %s: %s", listing_id, chat_id, exc)
+
+    return seen, True
+
+
 async def _global_scrape_and_notify(application: "Application") -> None:
     import db.queries as queries
     from scrapers.scraper_591 import Scraper591
-    from bot.sender import send_listing_message, send_page
-    from config import REGION_IDS, FACEBOOK_ENABLED
+    from bot.sender import send_page
+    from config import REGION_IDS
 
     active_chat_ids = await queries.get_all_active_monitors()
     if not active_chat_ids:
@@ -82,19 +168,9 @@ async def _global_scrape_and_notify(application: "Application") -> None:
 
     logger.info("全域爬蟲開始，服務 %d 位使用者", len(active_chat_ids))
 
-    # Load each user's prefs + blacklist + first-run state
-    user_data: dict[int, dict] = {}
-    for chat_id in active_chat_ids:
-        prefs      = await queries.get_preference(chat_id)
-        blacklisted = await queries.get_blacklisted_set(chat_id)
-        is_first   = not await queries.is_first_run_done(chat_id)
-        user_data[chat_id] = {
-            "prefs": prefs,
-            "blacklisted": blacklisted,
-            "is_first": is_first,
-            "first_run_ids": [],
-        }
-        if is_first:
+    user_data = await _load_user_data(active_chat_ids, queries)
+    for chat_id, ud in user_data.items():
+        if ud["is_first"]:
             await application.bot.send_message(
                 chat_id=chat_id,
                 text="🔍 首次掃描開始，這可能需要幾分鐘的時間建立初始資料庫...\n符合條件的最新房源會陸續出現！",
@@ -105,56 +181,12 @@ async def _global_scrape_and_notify(application: "Application") -> None:
     completed_sources: set[str] = set()
 
     scrapers = [Scraper591()]
-    if FACEBOOK_ENABLED:
-        from scrapers.scraper_facebook import ScraperFacebook
-        scrapers.append(ScraperFacebook())
     scrape_failed = False
     try:
         for scraper in scrapers:
-            consecutive_old_count = 0
-            early_exit = False
-
-            async for listing in scraper.fetch_listings(region_ids):
-                # 先篩選：找出所有符合條件的使用者
-                matching_users = [
-                    (chat_id, ud)
-                    for chat_id, ud in user_data.items()
-                    if (listing.source, listing.external_id) not in ud["blacklisted"]
-                    and _matches_preferences(listing, ud["prefs"])
-                ]
-
-                # 沒有任何使用者符合 → 不寫入 DB，直接略過
-                if not matching_users:
-                    continue
-
-                # 至少一位使用者符合 → upsert 到 DB，並記錄 seen_ids（用於下架偵測）
-                listing_id, is_new = await queries.upsert_listing(listing)
-                listing.id = listing_id
-                seen_ids[scraper.SOURCE_NAME].add(listing.external_id)
-
-                if is_new:
-                    consecutive_old_count = 0
-                else:
-                    consecutive_old_count += 1
-                    if consecutive_old_count >= 5:
-                        logger.info("%s 已追上進度，提早結束爬取。", scraper.SOURCE_NAME)
-                        early_exit = True
-                        break
-
-                # 分發給符合條件的使用者
-                for chat_id, ud in matching_users:
-                    if ud["is_first"]:
-                        ud["first_run_ids"].append(listing_id)
-                    elif is_new:
-                        from bot.keyboards import listing_keyboard
-                        try:
-                            await send_listing_message(
-                                application.bot, chat_id, listing, listing_keyboard(listing_id)
-                            )
-                        except Exception as exc:
-                            logger.warning("即時推播失敗 listing %s → chat %s: %s", listing_id, chat_id, exc)
-
-            if not early_exit:
+            seen, completed = await _run_source(scraper, region_ids, user_data, application, queries)
+            seen_ids[scraper.SOURCE_NAME] |= seen
+            if completed:
                 completed_sources.add(scraper.SOURCE_NAME)
 
         for scraper in scrapers:
@@ -191,7 +223,7 @@ async def _global_scrape_and_notify(application: "Application") -> None:
 
     # ── Stale detection ────────────────────────────────────────────────────────
     # Sources may opt out via STALE_CHECK_ENABLED=False (e.g. Facebook, where
-    # we can only see the most recent posts and "not seen" doesn't mean "removed").
+    # we only see the most recent posts and "not seen" doesn't mean "removed").
     stale_disabled_sources = {
         s.SOURCE_NAME for s in scrapers if not getattr(s, "STALE_CHECK_ENABLED", True)
     }
@@ -225,6 +257,74 @@ async def _global_scrape_and_notify(application: "Application") -> None:
                 await queries.save_pagination_session(chat_id, ids)
                 await send_page(application.bot, chat_id, ids, offset=0, queries=queries)
             await queries.set_first_run_done(chat_id)
+
+
+# ── Facebook job ───────────────────────────────────────────────────────────────
+
+_fb_scraper = None
+_fb_auth_alerted = False
+
+
+def get_facebook_scraper():
+    """Shared instance so the logged-in browser is reused across cycles."""
+    global _fb_scraper
+    if _fb_scraper is None:
+        from scrapers.facebook import ScraperFacebook
+        _fb_scraper = ScraperFacebook()
+    return _fb_scraper
+
+
+async def close_scrapers() -> None:
+    global _fb_scraper
+    if _fb_scraper is not None:
+        await _fb_scraper.close()
+        _fb_scraper = None
+
+
+async def _facebook_scrape_and_notify(application: "Application") -> None:
+    global _fb_auth_alerted
+    import db.queries as queries
+    from scrapers.facebook import FacebookAuthError
+    from config import FACEBOOK_ADMIN_CHAT_ID
+
+    active_chat_ids = await queries.get_all_active_monitors()
+    if not active_chat_ids:
+        return
+
+    # Users still in their first 591 scan are skipped; they get FB listings
+    # from the next cycle on.
+    user_data = {
+        cid: ud for cid, ud in (await _load_user_data(active_chat_ids, queries)).items()
+        if not ud["is_first"]
+    }
+    if not user_data:
+        return
+
+    scraper = get_facebook_scraper()
+    try:
+        await _run_source(scraper, [], user_data, application, queries)
+        _fb_auth_alerted = False
+    except FacebookAuthError as exc:
+        logger.error("FB 登入失效: %s", exc)
+        await scraper.close()
+        if FACEBOOK_ADMIN_CHAT_ID and not _fb_auth_alerted:
+            _fb_auth_alerted = True
+            try:
+                await application.bot.send_message(
+                    chat_id=FACEBOOK_ADMIN_CHAT_ID,
+                    text=(
+                        "⚠️ <b>FB 爬蟲登入失效</b>\n\n"
+                        f"{exc}\n\n"
+                        "請在本機執行 <code>python scripts/fb_login.py</code> 重新登入，"
+                        "並更新伺服器上的 state 檔。"
+                    ),
+                    parse_mode="HTML",
+                )
+            except Exception:
+                pass
+    except Exception as exc:
+        logger.error("FB 爬蟲發生錯誤: %s", exc, exc_info=True)
+        await scraper.close()
 
 
 # ── Weekly auto-cleanup ────────────────────────────────────────────────────────
@@ -289,7 +389,9 @@ def _matches_preferences(listing, prefs) -> bool:
     if prefs.min_size and listing.size_ping and listing.size_ping < prefs.min_size:
         return False
 
-    combined = f"{listing.title or ''} {str(listing.extra_info or '')}".lower()
+    combined = (
+        f"{listing.title or ''} {listing.description or ''} {str(listing.extra_info or '')}"
+    ).lower()
     if prefs.keywords_exclude:
         if any(kw.lower() in combined for kw in prefs.keywords_exclude):
             return False

@@ -30,10 +30,11 @@ from bot.handlers.command_handlers import (
     handle_cleanup_db,
     handle_web_token,
     handle_check_591,
+    handle_check_fb,
 )
 from bot.handlers.conversation_handlers import preferences_conv_handler
 from bot.handlers.callback_handlers import handle_callback
-from scheduler.job_manager import get_scheduler, start_global_job, start_weekly_cleanup, start_job_for_chat
+from scheduler.job_manager import get_scheduler, start_global_job, start_weekly_cleanup, close_scrapers
 
 logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -70,6 +71,7 @@ async def post_init(application) -> None:
         BotCommand("web_token",   "🔑 取得網頁登入 Token"),
         BotCommand("cleanup_db",  "🗑 清除不符合條件的房源"),
         BotCommand("check_591",   "🔎 檢查 591 房源是否已下架"),
+        BotCommand("check_fb",    "📘 檢查 FB 社團爬蟲狀態"),
         BotCommand("reset",       "⚠️ 重置所有個人設定"),
     ])
     logger.info("Bot commands registered.")
@@ -85,6 +87,7 @@ async def post_shutdown(application) -> None:
     scheduler = get_scheduler()
     if scheduler.running:
         scheduler.shutdown(wait=False)
+    await close_scrapers()
     await close_db()
     logger.info("Shutdown complete.")
 
@@ -118,6 +121,7 @@ def main() -> None:
     app.add_handler(CommandHandler("cleanup_db",  handle_cleanup_db))
     app.add_handler(CommandHandler("web_token",   handle_web_token))
     app.add_handler(CommandHandler("check_591",   handle_check_591))
+    app.add_handler(CommandHandler("check_fb",    handle_check_fb))
 
     app.add_handler(CallbackQueryHandler(handle_callback))
     app.add_error_handler(error_handler)

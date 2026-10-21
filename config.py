@@ -31,19 +31,17 @@ NEW_TAIPEI_DISTRICTS = [
 ALL_DISTRICTS = TAIPEI_DISTRICTS + NEW_TAIPEI_DISTRICTS
 
 # ── Facebook scraper ──────────────────────────────────────────────────────────
-# Facebook rental groups to scrape. Provide as a comma-separated list of group
-# IDs (numeric) or vanity slugs in the FACEBOOK_GROUPS env var, e.g.:
-#     FACEBOOK_GROUPS=123456789012345,taipei.rent.house
-#
-# FACEBOOK_COOKIES_PATH points to a JSON file exported from a logged-in browser
-# session (Playwright storage_state format). Without it, FB rental groups
-# return mostly empty content because most are members-only.
-#
-# FACEBOOK_MAX_POSTS_PER_GROUP caps how many posts we pull per group per cycle
-# to keep cycles bounded.
+# FACEBOOK_GROUPS：逗號分隔的社團 id 或 vanity slug；留空即停用 FB 爬蟲。
+# FACEBOOK_STATE_PATH：已登入的 Playwright storage_state JSON（用 scripts/fb_login.py 產生）。
+# FACEBOOK_INTERVAL_MINUTES：FB 獨立排程的間隔，刻意比 591 慢以降低封號風險。
+# FACEBOOK_ADMIN_CHAT_ID：登入失效時通知的 Telegram chat id（選填）。
 FACEBOOK_GROUPS: list[str] = [
     g.strip() for g in os.environ.get("FACEBOOK_GROUPS", "").split(",") if g.strip()
 ]
-FACEBOOK_COOKIES_PATH: str | None = os.environ.get("FACEBOOK_COOKIES_PATH") or None
+FACEBOOK_STATE_PATH: str = os.environ.get("FACEBOOK_STATE_PATH", "secrets/fb_state.json")
 FACEBOOK_MAX_POSTS_PER_GROUP: int = int(os.environ.get("FACEBOOK_MAX_POSTS_PER_GROUP", "30"))
+FACEBOOK_INTERVAL_MINUTES: int = int(os.environ.get("FACEBOOK_INTERVAL_MINUTES", "15"))
+FACEBOOK_ADMIN_CHAT_ID: int | None = (
+    int(os.environ["FACEBOOK_ADMIN_CHAT_ID"]) if os.environ.get("FACEBOOK_ADMIN_CHAT_ID") else None
+)
 FACEBOOK_ENABLED: bool = bool(FACEBOOK_GROUPS)

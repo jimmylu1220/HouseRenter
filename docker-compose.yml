@@ -23,12 +23,14 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-jimmylu}:${POSTGRES_PASSWORD:-jimmylu}@db:5432/${POSTGRES_DB:-houserenter}
       # Facebook 爬蟲（選填）— 留空 FACEBOOK_GROUPS 即停用
       FACEBOOK_GROUPS: ${FACEBOOK_GROUPS:-}
-      FACEBOOK_COOKIES_PATH: ${FACEBOOK_COOKIES_PATH:-}
+      FACEBOOK_STATE_PATH: /secrets/fb_state.json
       FACEBOOK_MAX_POSTS_PER_GROUP: ${FACEBOOK_MAX_POSTS_PER_GROUP:-30}
-    # 啟用 FB 爬蟲時，取消下面註解並把 storage_state JSON 放在 host 的 ./secrets/ 目錄，
-    # 然後在 .env 設 FACEBOOK_COOKIES_PATH=/secrets/fb_state.json
-    # volumes:
-    #   - ./secrets:/secrets:ro
+      FACEBOOK_INTERVAL_MINUTES: ${FACEBOOK_INTERVAL_MINUTES:-15}
+      FACEBOOK_ADMIN_CHAT_ID: ${FACEBOOK_ADMIN_CHAT_ID:-}
+    # 用 scripts/fb_login.py 產生的登入狀態放在 host 的 ./secrets/fb_state.json。
+    # 可寫入：爬蟲會把更新後的 cookie 寫回，延長登入壽命。
+    volumes:
+      - ./secrets:/secrets
     restart: unless-stopped
 
   web:

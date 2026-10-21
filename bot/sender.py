@@ -65,7 +65,7 @@ async def _build_media_item(img: dict, caption: str | None) -> Optional[InputMed
 
     Preference order:
       1. cached telegram file_id (free, instant)
-      2. raw URL (Telegram fetches it; works for 591/HouseFun)
+      2. raw URL (Telegram fetches it; works for public CDNs)
       3. downloaded bytes (fallback for protected CDNs like Facebook)
     """
     file_id = img.get("file_id")
@@ -161,8 +161,8 @@ async def send_listing_message(
 
     images = _normalize_images(listing.images)
 
-    # Multi-image path (skip for Facebook: send_media_group can't carry reply_markup,
-    # so we'd need a split message. Use single-photo path to keep it as one message.)
+    # Multi-image path. Skipped for Facebook: send_media_group can't carry reply_markup,
+    # so the buttons would end up in a separate message. Keep FB posts as one message.
     if len(images) >= 2 and listing.source != "facebook":
         ok = await _send_multi_image(bot, chat_id, listing, text)
         if ok:
