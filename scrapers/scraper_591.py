@@ -49,12 +49,16 @@ def _parse_tags(record: dict):
     parking = None
     elevator = None
 
+    # Current API: tags is a list of strings ("可養寵物", "有電梯", "有車位");
+    # older versions used [{"name": ...}].
     tags = record.get("rentTagList") or record.get("tags") or record.get("tag") or []
-    tag_names = {t.get("name", "") for t in tags if isinstance(t, dict)}
+    tag_names = {
+        (t.get("name", "") if isinstance(t, dict) else str(t)).strip() for t in tags
+    }
 
     if any("寵物" in name for name in tag_names):
         pets = "可"
-    if any("停車" in name for name in tag_names):
+    if any("停車" in name or "車位" in name for name in tag_names):
         parking = "有"
     if any("電梯" in name for name in tag_names):
         elevator = True
@@ -64,6 +68,8 @@ def _parse_tags(record: dict):
         pets = str(record["pet"])
     if parking is None and record.get("parkingStr"):
         parking = str(record["parkingStr"])
+    if parking is None and record.get("price_has_carport") in (1, "1", True):
+        parking = "有"
     if elevator is None and record.get("elevator") in (1, "1", True):
         elevator = True
 
